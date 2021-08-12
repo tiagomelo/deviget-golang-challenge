@@ -54,10 +54,17 @@ func (c *TransparentCache) GetPricesFor(itemCodes ...string) ([]float64, error) 
 	for _, itemCode := range itemCodes {
 		ic := itemCode
 		g.Go(func() error {
+			if price, ok := c.prices.Load(ic); ok {
+				mu.Lock()
+				results = append(results, price.(float64))
+				mu.Unlock()
+				return nil
+			}
 			price, err := c.GetPriceFor(ic)
 			if err != nil {
 				return err
 			}
+			c.prices.Store(ic, price)
 			mu.Lock()
 			results = append(results, price)
 			mu.Unlock()
