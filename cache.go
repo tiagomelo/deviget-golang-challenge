@@ -1,6 +1,7 @@
 package sample1
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -23,6 +24,12 @@ type TransparentCache struct {
 	prices             sync.Map
 }
 
+// PriceCacheEntry represents a cache entry
+type PriceCacheEntry struct {
+	price     float64
+	timestamp time.Time
+}
+
 func NewTransparentCache(actualPriceService PriceService, maxAge time.Duration) *TransparentCache {
 	return &TransparentCache{
 		actualPriceService: actualPriceService,
@@ -32,17 +39,32 @@ func NewTransparentCache(actualPriceService PriceService, maxAge time.Duration) 
 
 // GetPriceFor gets the price for the item, either from the cache or the actual service if it was not cached or too old
 func (c *TransparentCache) GetPriceFor(itemCode string) (float64, error) {
-	price, ok := c.prices.Load(itemCode)
+	var priceCacheEntry PriceCacheEntry
+	var castSuccessful bool
+	now := time.Now().UTC()
+	retrievedPriceCacheEntry, ok := c.prices.Load(itemCode)
 	if ok {
-		// TODO: check that the price was retrieved less than "maxAge" ago!
-		return price.(float64), nil
+		if priceCacheEntry, castSuccessful = retrievedPriceCacheEntry.(PriceCacheEntry); !castSuccessful {
+			return 0, errors.New("error when casting")
+		}
+		// check if priceCacheEntry is still valid
+		expDate := priceCacheEntry.timestamp.Add(c.maxAge)
+		if now.Before(expDate) {
+			return retrievedPriceCacheEntry.(PriceCacheEntry).price, nil
+		}
+		// priceCacheEntry is expired; time to evict it from cache
+		c.prices.Delete(itemCode)
 	}
 	price, err := c.actualPriceService.GetPriceFor(itemCode)
 	if err != nil {
 		return 0, fmt.Errorf("getting price from service : %v", err.Error())
 	}
-	c.prices.Store(itemCode, price)
-	return price.(float64), nil
+	priceCacheEntry = PriceCacheEntry{
+		price:     price,
+		timestamp: now,
+	}
+	c.prices.Store(itemCode, priceCacheEntry)
+	return priceCacheEntry.price, nil
 }
 
 // GetPricesFor gets the prices for several items at once, some might be found in the cache, others might not
@@ -50,21 +72,14 @@ func (c *TransparentCache) GetPriceFor(itemCode string) (float64, error) {
 func (c *TransparentCache) GetPricesFor(itemCodes ...string) ([]float64, error) {
 	var g errgroup.Group
 	var mu sync.Mutex
-	results := []float64{}
+	var results []float64
 	for _, itemCode := range itemCodes {
 		ic := itemCode
 		g.Go(func() error {
-			if price, ok := c.prices.Load(ic); ok {
-				mu.Lock()
-				results = append(results, price.(float64))
-				mu.Unlock()
-				return nil
-			}
 			price, err := c.GetPriceFor(ic)
 			if err != nil {
 				return err
 			}
-			c.prices.Store(ic, price)
 			mu.Lock()
 			results = append(results, price)
 			mu.Unlock()
@@ -72,7 +87,7 @@ func (c *TransparentCache) GetPricesFor(itemCodes ...string) ([]float64, error) 
 		})
 	}
 	if err := g.Wait(); err != nil {
-		return []float64{}, err
+		return results, err
 	}
 	return results, nil
 }

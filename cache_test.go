@@ -107,6 +107,28 @@ func TestGetPriceFor_ReturnsErrorOnServiceError(t *testing.T) {
 	}
 }
 
+// Check that an error is raised in case of casting problems
+func TestGetPriceFor_ErrorWhenCastingCacheItem(t *testing.T) {
+	mockService := &mockPriceService{}
+	cache := NewTransparentCache(mockService, time.Minute)
+	cache.prices.Store("p1", "invalid type")
+	_, err := cache.GetPriceFor("p1")
+	if err == nil {
+		t.Errorf("expected error, got nil")
+	}
+}
+
+// Check that an error is raised in case of casting problems
+func TestGetPricesFor_ErrorWhenCastingCacheItem(t *testing.T) {
+	mockService := &mockPriceService{}
+	cache := NewTransparentCache(mockService, time.Minute)
+	cache.prices.Store("p1", "invalid type")
+	_, err := cache.GetPricesFor("p1")
+	if err == nil {
+		t.Errorf("expected error, got nil")
+	}
+}
+
 // Check that cache can return more than one price at once, caching appropriately
 func TestGetPricesFor_GetsSeveralPricesAtOnceAndCachesThem(t *testing.T) {
 	var mr sync.Map
@@ -142,16 +164,18 @@ func TestGetPriceFor_DoesNotReturnOldResults(t *testing.T) {
 	// get price for "p1" and "p2", only "p2" should be retrieved from the external service (one more external call)
 	assertFloat(t, 5, getPriceWithNoErr(t, cache, "p1"), "wrong price returned")
 	assertFloat(t, 5, getPriceWithNoErr(t, cache, "p1"), "wrong price returned")
+	assertFloat(t, 5, getPriceWithNoErr(t, cache, "p1"), "wrong price returned")
 	assertFloat(t, 7, getPriceWithNoErr(t, cache, "p2"), "wrong price returned")
 	assertFloat(t, 7, getPriceWithNoErr(t, cache, "p2"), "wrong price returned")
 	assertInt(t, 2, mockService.getNumCalls(), "wrong number of service calls")
 	// sleep 0.7 the maxAge
 	time.Sleep(maxAge70Pct)
-	// get price for "p1" and "p2", only "p1" should be retrieved from the cache ("p2" is still valid)
+	// get price for "p1" and "p2", only "p2" should be retrieved from the cache ("p2" is still valid).
+	// p1 is expired, so it will be evicted from cache and stored again (one more external call)
 	assertFloat(t, 5, getPriceWithNoErr(t, cache, "p1"), "wrong price returned")
 	assertFloat(t, 5, getPriceWithNoErr(t, cache, "p1"), "wrong price returned")
 	assertFloat(t, 7, getPriceWithNoErr(t, cache, "p2"), "wrong price returned")
-	assertInt(t, 2, mockService.getNumCalls(), "wrong number of service calls")
+	assertInt(t, 3, mockService.getNumCalls(), "wrong number of service calls")
 }
 
 // Check that cache parallelize service calls when getting several values at once
